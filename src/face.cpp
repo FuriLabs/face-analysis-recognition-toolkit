@@ -12,6 +12,7 @@
 
 #include "tensorflow/lite/model.h"
 #include "tensorflow/lite/kernels/register.h"
+#include "tensorflow/lite/delegates/nnapi/nnapi_delegate_c_api.h"
 
 #include "face.h"
 
@@ -49,6 +50,22 @@ public:
         if (!detector_)
             throw std::runtime_error("Failed to build detection interpreter");
 
+        TfLiteNnapiDelegateOptions nnapi_options = TfLiteNnapiDelegateOptionsDefault();
+        nnapi_options.allow_fp16 = true;
+        nnapi_options.disallow_nnapi_cpu = false;
+
+        nnapi_detection_delegate_ = TfLiteNnapiDelegateCreate(&nnapi_options);
+        if (!nnapi_detection_delegate_) {
+            g_debug("Failed to create NNAPI delegate for detection model, falling back to CPU");
+        } else {
+            g_debug("Using NNAPI delegate for detection model");
+            if (detector_->ModifyGraphWithDelegate(nnapi_detection_delegate_) != kTfLiteOk) {
+                g_debug("Failed to apply NNAPI delegate to detection model, falling back to CPU");
+                TfLiteNnapiDelegateDelete(nnapi_detection_delegate_);
+                nnapi_detection_delegate_ = nullptr;
+            }
+        }
+
         if (detector_->AllocateTensors() != kTfLiteOk)
             throw std::runtime_error("Failed to allocate tensors for detection model");
 
@@ -59,6 +76,18 @@ public:
         tflite::InterpreterBuilder(*recognition_model_, resolver)(&recognizer_);
         if (!recognizer_)
             throw std::runtime_error("Failed to build recognition interpreter");
+
+        nnapi_recognition_delegate_ = TfLiteNnapiDelegateCreate(&nnapi_options);
+        if (!nnapi_recognition_delegate_) {
+            g_debug("Failed to create NNAPI delegate for recognition model, falling back to CPU");
+        } else {
+            g_debug("Using NNAPI delegate for recognition model");
+            if (recognizer_->ModifyGraphWithDelegate(nnapi_recognition_delegate_) != kTfLiteOk) {
+                g_debug("Failed to apply NNAPI delegate to recognition model, falling back to CPU");
+                TfLiteNnapiDelegateDelete(nnapi_recognition_delegate_);
+                nnapi_recognition_delegate_ = nullptr;
+            }
+        }
 
         if (recognizer_->AllocateTensors() != kTfLiteOk)
             throw std::runtime_error("Failed to allocate tensors for recognition model");
@@ -83,6 +112,17 @@ public:
         fs::path enrollment_file = get_data_dir() / "enrolled_face.json";
         if (fs::exists(enrollment_file) && load_status == 0)
             throw std::runtime_error("Failed to load enrolled face data");
+    }
+
+    ~FaceDetector() {
+        if (nnapi_detection_delegate_) {
+            TfLiteNnapiDelegateDelete(nnapi_detection_delegate_);
+            nnapi_detection_delegate_ = nullptr;
+        }
+        if (nnapi_recognition_delegate_) {
+            TfLiteNnapiDelegateDelete(nnapi_recognition_delegate_);
+            nnapi_recognition_delegate_ = nullptr;
+        }
     }
 
     std::vector<Face>
@@ -124,7 +164,8 @@ public:
 
             std::memcpy(input_data, resized_image.data, resized_image.total() * resized_image.elemSize());
 
-            g_debug("Running inference...");
+            g_debug("Running inference with %s...",
+                    nnapi_detection_delegate_ ? "NNAPI delegate" : "CPU");
             if (detector_->Invoke() != kTfLiteOk) {
                 g_debug("Failed to invoke detection model");
                 return {};
@@ -175,7 +216,7 @@ public:
             g_debug("Detected faces count: %zu", detected_faces.size());
             return detected_faces;
         } catch (const std::exception &e) {
-            g_debug("Exception in detect_faces:", e.what());
+            g_debug("Exception in detect_faces: %s", e.what());
             return {};
         }
     }
@@ -218,6 +259,8 @@ public:
                             float_image.total() * float_image.elemSize());
             }
 
+            g_debug("Running recognition with %s...",
+                    nnapi_recognition_delegate_ ? "NNAPI delegate" : "CPU");
             if (recognizer_->Invoke() != kTfLiteOk)
                 return std::vector<float>();
 
@@ -232,7 +275,8 @@ public:
             int embedding_size = output_tensor->dims->data[1];
 
             return std::vector<float>(output_data, output_data + embedding_size);
-        } catch (const std::exception &) {
+        } catch (const std::exception &e) {
+            g_debug("Exception in get_face_embedding: %s", e.what());
             return std::vector<float>();
         }
     }
@@ -403,6 +447,9 @@ private:
     std::unique_ptr<tflite::Interpreter> recognizer_;
     int recog_input_index_;
     int recog_output_index_;
+
+    TfLiteDelegate* nnapi_detection_delegate_ = nullptr;
+    TfLiteDelegate* nnapi_recognition_delegate_ = nullptr;
 
     float min_confidence_;
     float max_distance_;
