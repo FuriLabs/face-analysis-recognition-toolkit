@@ -109,6 +109,14 @@ main(int argc, char *argv[])
     status_label = gtk_label_new("Initializing...");
     gtk_widget_set_margin_top(status_label, 5);
 
+    const char *detection_model = "models/detect-class1.tflite";
+    const char *recognition_model = "models/mobile_face_net.tflite";
+    face_handle = face_create(detection_model, recognition_model);
+    if (!face_handle) {
+        fprintf(stderr, "Failed to create face detector\n");
+        return EXIT_FAILURE;
+    }
+
     const char *pipeline_str =
         "droidcamsrc camera_device=1 mode=2 ! tee name=t "
         "t. ! queue max-size-buffers=1 leaky=downstream ! video/x-raw, width=640, height=480 ! videoconvert ! "
@@ -153,14 +161,6 @@ main(int argc, char *argv[])
     gtk_widget_show_all(window);
 
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
-
-    const char *detection_model = "models/detect-class1.tflite";
-    const char *recognition_model = "models/mobile_face_net.tflite";
-    face_handle = face_create(detection_model, recognition_model);
-    if (!face_handle) {
-        fprintf(stderr, "Failed to create face detector\n");
-        return EXIT_FAILURE;
-    }
 
     gtk_main();
 
