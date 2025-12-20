@@ -1,34 +1,59 @@
-CXX      = g++
 CC       = gcc
+CXX      = g++
 
-INCDIR   = include
-SRCDIR   = src
-TESTDIR  = test
+BUILDDIR = build
 
-CXX_SRCS = $(SRCDIR)/face.cpp
-C_SRCS   = $(TESTDIR)/face_auth.c
+TARGET_LIBFART = libfart.so
+TARGET_TEST    = face_auth_test
 
-CXX_OBJS = $(CXX_SRCS:.cpp=.o)
-C_OBJS   = $(C_SRCS:.c=.o)
+SOURCES = src/detector.cpp src/fart.cpp
+HEADERS = include/fart.h include/fart_enums.h
+TEST_SOURCES = test/face_auth_test.c
 
-TARGET   = face_auth
+PREFIX  ?= /usr
+TRIPLET ?= $(shell $(CC) -dumpmachine)
 
-CXXFLAGS = -I$(INCDIR) -I/usr/include/tensorflow $(shell pkg-config --cflags glib-2.0 opencv4)
-CFLAGS   = -I$(INCDIR) $(shell pkg-config --cflags gtk+-3.0 gstreamer-1.0 glib-2.0)
+PKG_CXX_CFLAGS = $(shell pkg-config --cflags glib-2.0 opencv4)
+PKG_CXX_LIBS   = $(shell pkg-config --libs glib-2.0 opencv4) -ltensorflow-lite
 
-CXX_LDFLAGS  = $(shell pkg-config --libs glib-2.0 opencv4) -ltensorflow-lite
-C_LDFLAGS  = $(shell pkg-config --libs gtk+-3.0 gstreamer-1.0 glib-2.0)
+PKG_C_CFLAGS = $(shell pkg-config --cflags gtk+-3.0 gstreamer-1.0 glib-2.0)
+PKG_C_LIBS   = $(shell pkg-config --libs gtk+-3.0 gstreamer-1.0 glib-2.0)
 
-all: $(TARGET)
+CXXFLAGS = -Iinclude -I/usr/include/tensorflow $(PKG_CXX_CFLAGS) -fPIC
+CFLAGS   = -Iinclude $(PKG_C_CFLAGS)
 
-$(TARGET): $(CXX_OBJS) $(C_OBJS)
-	$(CXX) -o $@ $(CXX_OBJS) $(CXX_LDFLAGS) $(C_OBJS) $(C_LDFLAGS)
+LDFLAGS_SO   = -shared
+LDFLAGS_TEST = -L. -lfart
 
-$(SRCDIR)/%.o: $(SRCDIR)/%.cpp
+CXX_OBJS = $(patsubst src/%.cpp,$(BUILDDIR)/%.o,$(SOURCES))
+C_OBJS   = $(patsubst test/%.c,$(BUILDDIR)/%.o,$(TEST_SOURCES))
+
+.PHONY: all test clean install
+
+all: $(TARGET_LIBFART)
+
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
+$(TARGET_LIBFART): $(BUILDDIR) $(CXX_OBJS)
+	$(CXX) $(LDFLAGS_SO) -o $@ $(CXX_OBJS) $(PKG_CXX_LIBS)
+
+test: $(TARGET_LIBFART) $(BUILDDIR) $(C_OBJS)
+	$(CC) -o $(TARGET_TEST) $(C_OBJS) $(LDFLAGS_TEST) $(PKG_C_LIBS)
+
+$(BUILDDIR)/%.o: src/%.cpp | $(BUILDDIR)
 	$(CXX) -c $< -o $@ $(CXXFLAGS)
 
-$(TESTDIR)/%.o: $(TESTDIR)/%.c
+$(BUILDDIR)/%.o: test/%.c | $(BUILDDIR)
 	$(CC) -c $< -o $@ $(CFLAGS)
 
+install: all
+	install -d $(DESTDIR)$(PREFIX)/lib/$(TRIPLET)/
+	install -m 0644 $(TARGET_LIBFART) $(DESTDIR)$(PREFIX)/lib/$(TRIPLET)/
+	install -d $(DESTDIR)$(PREFIX)/include/fart
+	install -m 0644 $(HEADERS) $(DESTDIR)$(PREFIX)/include/fart
+	install -d $(DESTDIR)$(PREFIX)/share/fart/
+	cp -r models $(DESTDIR)$(PREFIX)/share/fart/
+
 clean:
-	rm -f $(CXX_OBJS) $(C_OBJS) $(TARGET)
+	rm -rf $(BUILDDIR) $(TARGET_LIBFART) $(TARGET_TEST)

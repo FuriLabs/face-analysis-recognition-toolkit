@@ -5,13 +5,15 @@
 
 #include <gtk/gtk.h>
 #include <gst/gst.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-#include "face.h"
+#include "fart.h"
 
 GtkWidget *status_label = NULL;
-static FacialUniversalRecognition *face_handle = NULL;
+static FaceAnalysisRecognition *face_handle = NULL;
 
-const char *
+static const char *
 enrollment_state_to_string(EnrollmentState state)
 {
     switch (state) {
@@ -26,7 +28,7 @@ enrollment_state_to_string(EnrollmentState state)
     }
 }
 
-const char *
+static const char *
 recognition_state_to_string(RecognitionState state)
 {
     switch (state) {
@@ -52,6 +54,8 @@ update_label(gpointer data)
 static GstFlowReturn
 on_new_sample(GstElement *sink, gpointer user_data)
 {
+    (void) user_data;
+
     GstSample *sample = NULL;
     g_signal_emit_by_name(sink, "pull-sample", &sample);
     if (!sample)
@@ -65,7 +69,7 @@ on_new_sample(GstElement *sink, gpointer user_data)
     }
 
     GstStructure *s = gst_caps_get_structure(caps, 0);
-    int width, height;
+    int width = 0, height = 0;
     if (!gst_structure_get_int(s, "width", &width) ||
         !gst_structure_get_int(s, "height", &height)) {
         gst_sample_unref(sample);
@@ -78,18 +82,19 @@ on_new_sample(GstElement *sink, gpointer user_data)
         EnrollmentState enroll_state;
         RecognitionState recog_state;
 
-        if (!face_is_enrolled(face_handle)) {
-            enroll_state = face_enroll(face_handle, map.data, width, height, channels);
+        if (!fart_is_enrolled(face_handle)) {
+            enroll_state = fart_enroll(face_handle, map.data, width, height, channels);
             g_print("Enrollment state: %s\n", enrollment_state_to_string(enroll_state));
             g_idle_add(update_label, g_strdup(enrollment_state_to_string(enroll_state)));
         } else {
-            recog_state = face_recognize(face_handle, map.data, width, height, channels);
+            recog_state = fart_recognize(face_handle, map.data, width, height, channels);
             g_print("Recognition state: %s\n", recognition_state_to_string(recog_state));
             g_idle_add(update_label, g_strdup(recognition_state_to_string(recog_state)));
         }
 
         gst_buffer_unmap(buffer, &map);
     }
+
     gst_sample_unref(sample);
     return GST_FLOW_OK;
 }
@@ -103,6 +108,7 @@ main(int argc, char *argv[])
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "Face Detection, Enrollment & Recognition");
     gtk_window_set_default_size(GTK_WINDOW(window), 640, 480);
+
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(window), vbox);
 
@@ -111,7 +117,8 @@ main(int argc, char *argv[])
 
     const char *detection_model = "models/detect-class1.tflite";
     const char *recognition_model = "models/mobile_face_net.tflite";
-    face_handle = face_create(detection_model, recognition_model);
+
+    face_handle = fart_create(detection_model, recognition_model);
     if (!face_handle) {
         fprintf(stderr, "Failed to create face detector\n");
         return EXIT_FAILURE;
@@ -129,12 +136,15 @@ main(int argc, char *argv[])
     if (error) {
         fprintf(stderr, "Error creating pipeline: %s\n", error->message);
         g_error_free(error);
+        fart_destroy(face_handle);
         return EXIT_FAILURE;
     }
 
     GstElement *gtksink = gst_bin_get_by_name(GST_BIN(pipeline), "sink");
     if (!gtksink) {
         fprintf(stderr, "Failed to get gtksink element from pipeline\n");
+        gst_object_unref(pipeline);
+        fart_destroy(face_handle);
         return EXIT_FAILURE;
     }
 
@@ -142,6 +152,9 @@ main(int argc, char *argv[])
     g_object_get(G_OBJECT(gtksink), "widget", &video_widget, NULL);
     if (!video_widget) {
         fprintf(stderr, "Failed to retrieve video widget from gtksink\n");
+        gst_object_unref(gtksink);
+        gst_object_unref(pipeline);
+        fart_destroy(face_handle);
         return EXIT_FAILURE;
     }
 
@@ -151,6 +164,9 @@ main(int argc, char *argv[])
     GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink");
     if (!appsink) {
         fprintf(stderr, "Failed to get appsink element from pipeline\n");
+        gst_object_unref(gtksink);
+        gst_object_unref(pipeline);
+        fart_destroy(face_handle);
         return EXIT_FAILURE;
     }
 
@@ -161,13 +177,13 @@ main(int argc, char *argv[])
     gtk_widget_show_all(window);
 
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
-
     gtk_main();
 
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(appsink);
     gst_object_unref(gtksink);
     gst_object_unref(pipeline);
-    face_destroy(face_handle);
+
+    fart_destroy(face_handle);
     return EXIT_SUCCESS;
 }
