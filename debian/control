@@ -1,0 +1,31 @@
+Source: face-analysis-recognition-toolkit
+Maintainer: Bardia Moshiri <bardia@furilabs.com>
+Section: libs
+Priority: optional
+Build-Depends: debhelper-compat (= 13),
+               gcc,
+               make,
+               pkg-config,
+               libopencv-dev,
+               libglib2.0-dev,
+               libtensorflow-lite-dev,
+               nlohmann-json3-dev,
+               libgtk-3-dev,
+               libgstreamer1.0-dev,
+               libgstreamer-plugins-base1.0-dev,
+Standards-Version: 4.7.2
+Vcs-Browser: https://github.com/furilabs/face-analysis-recognition-toolkit
+Vcs-Git: https://github.com/furilabs/face-analysis-recognition-toolkit.git
+
+Package: libfart
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends},
+Description: libpq
+ Face analysis recognition toolkit shared object
+
+Package: libfart-dev
+Architecture: any
+Depends: ${misc:Depends},
+          libfart (= ${binary:Version}),
+Description: libfart-dev
+ Face analysis recognition toolkit development headers

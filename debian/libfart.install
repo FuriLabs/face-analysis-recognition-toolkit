@@ -1,0 +1,3 @@
+usr/lib/*/libfart.so
+usr/share/fart/models/detect-class1.tflite
+usr/share/fart/models/mobile_face_net.tflite
