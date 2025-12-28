@@ -8,6 +8,7 @@
 #include <iostream>
 #include <vector>
 
+#include <glib.h>
 #include <opencv2/opencv.hpp>
 
 #include "fart.h"
@@ -22,38 +23,90 @@ extern "C" {
 FaceAnalysisRecognition *
 fart_create(const char *detection_model, const char *recognition_model)
 {
-    if (!detection_model || !recognition_model)
+    if (!detection_model) {
+        g_debug("fart_create: detection_model is NULL");
         return nullptr;
+    }
+    if (!recognition_model) {
+        g_debug("fart_create: recognition_model is NULL");
+        return nullptr;
+    }
 
     FaceAnalysisRecognition *handle = new FaceAnalysisRecognition();
+    if (!handle) {
+        g_debug("fart_create: failed to allocate handle");
+        return nullptr;
+    }
 
     try {
         handle->instance = new FaceDetector(std::string(detection_model),
                                             std::string(recognition_model));
     } catch (const std::exception &e) {
         std::cerr << "Error in fart_create: " << e.what() << std::endl;
+        g_debug("fart_create: exception creating FaceDetector: %s", e.what());
+        delete handle;
+        return nullptr;
+    } catch (...) {
+        g_debug("fart_create: unknown exception creating FaceDetector");
         delete handle;
         return nullptr;
     }
 
+    if (!handle->instance) {
+        g_debug("fart_create: FaceDetector instance is NULL after construction");
+        delete handle;
+        return nullptr;
+    }
+
+    g_debug("fart_create: created handle=%p instance=%p", handle, handle->instance);
     return handle;
 }
 
 void
 fart_destroy(FaceAnalysisRecognition *handle)
 {
-    if (!handle)
+    if (!handle) {
+        g_debug("fart_destroy: handle is NULL");
         return;
+    }
+
+    if (!handle->instance) {
+        g_debug("fart_destroy: handle->instance is NULL (handle=%p)", handle);
+        delete handle;
+        return;
+    }
 
     delete handle->instance;
     handle->instance = nullptr;
     delete handle;
+
+    g_debug("fart_destroy: destroyed handle");
 }
 
 static inline bool
 validate_image_args(const unsigned char *image_data, int width, int height, int channels)
 {
-    return image_data && width > 0 && height > 0 && (channels == 1 || channels == 3 || channels == 4);
+    if (!image_data) {
+        g_debug("validate_image_args: image_data is NULL");
+        return false;
+    }
+
+    if (width <= 0) {
+        g_debug("validate_image_args: invalid width=%d", width);
+        return false;
+    }
+
+    if (height <= 0) {
+        g_debug("validate_image_args: invalid height=%d", height);
+        return false;
+    }
+
+    if (!(channels == 1 || channels == 3 || channels == 4)) {
+        g_debug("validate_image_args: invalid channels=%d (expected 1,3,4)", channels);
+        return false;
+    }
+
+    return true;
 }
 
 Face *
@@ -61,22 +114,43 @@ fart_detect(FaceAnalysisRecognition *handle,
             const unsigned char *image_data,
             int width, int height, int channels)
 {
-    if (!handle || !handle->instance || !validate_image_args(image_data, width, height, channels))
+    if (!handle) {
+        g_debug("fart_detect: handle is NULL");
         return nullptr;
+    }
+
+    if (!handle->instance) {
+        g_debug("fart_detect: handle->instance is NULL (handle=%p)", handle);
+        return nullptr;
+    }
+
+    if (!validate_image_args(image_data, width, height, channels)) {
+        g_debug("fart_detect: invalid image args (w=%d h=%d c=%d)", width, height, channels);
+        return nullptr;
+    }
 
     cv::Mat image(height, width,
                   (channels == 1) ? CV_8UC1 : CV_8UC(channels),
                   (void *)image_data);
 
+    if (image.empty()) {
+        g_debug("fart_detect: constructed cv::Mat is empty (w=%d h=%d c=%d)", width, height, channels);
+        return nullptr;
+    }
+
     std::vector<FaceDetector::DetectedFace> detected = handle->instance->detect_faces(image);
 
     int count = (int)detected.size();
-    if (count <= 0)
+    if (count <= 0) {
+        g_debug("fart_detect: no faces detected");
         return nullptr;
+    }
 
     Face *faces_array = (Face *)std::malloc((size_t)count * sizeof(Face));
-    if (!faces_array)
+    if (!faces_array) {
+        g_debug("fart_detect: malloc failed for %d faces", count);
         return nullptr;
+    }
 
     for (int i = 0; i < count; ++i) {
         faces_array[i].x = detected[i].bbox.x;
@@ -87,14 +161,20 @@ fart_detect(FaceAnalysisRecognition *handle,
         faces_array[i].face_count = count;
     }
 
+    g_debug("fart_detect: returning %d faces", count);
     return faces_array;
 }
 
 void
 fart_free_faces(Face *faces)
 {
-    if (faces)
-        std::free(faces);
+    if (!faces) {
+        g_debug("fart_free_faces: faces is NULL");
+        return;
+    }
+
+    std::free(faces);
+    g_debug("fart_free_faces: freed faces array");
 }
 
 EnrollmentState
@@ -102,14 +182,33 @@ fart_enroll(FaceAnalysisRecognition *handle,
             const unsigned char *image_data,
             int width, int height, int channels)
 {
-    if (!handle || !handle->instance || !validate_image_args(image_data, width, height, channels))
+    if (!handle) {
+        g_debug("fart_enroll: handle is NULL");
         return ENROLLMENT_FAIL;
+    }
+
+    if (!handle->instance) {
+        g_debug("fart_enroll: handle->instance is NULL (handle=%p)", handle);
+        return ENROLLMENT_FAIL;
+    }
+
+    if (!validate_image_args(image_data, width, height, channels)) {
+        g_debug("fart_enroll: invalid image args (w=%d h=%d c=%d)", width, height, channels);
+        return ENROLLMENT_FAIL;
+    }
 
     cv::Mat image(height, width,
                   (channels == 1) ? CV_8UC1 : CV_8UC(channels),
                   (void *)image_data);
 
-    return handle->instance->enroll_face(image);
+    if (image.empty()) {
+        g_debug("fart_enroll: constructed cv::Mat is empty (w=%d h=%d c=%d)", width, height, channels);
+        return ENROLLMENT_FAIL;
+    }
+
+    EnrollmentState st = handle->instance->enroll_face(image);
+    g_debug("fart_enroll: %d", (int)st);
+    return st;
 }
 
 RecognitionState
@@ -117,23 +216,51 @@ fart_recognize(FaceAnalysisRecognition *handle,
                const unsigned char *image_data,
                int width, int height, int channels)
 {
-    if (!handle || !handle->instance || !validate_image_args(image_data, width, height, channels))
+    if (!handle) {
+        g_debug("fart_recognize: handle is NULL");
         return RECOGNITION_FAIL;
+    }
+
+    if (!handle->instance) {
+        g_debug("fart_recognize: handle->instance is NULL (handle=%p)", handle);
+        return RECOGNITION_FAIL;
+    }
+
+    if (!validate_image_args(image_data, width, height, channels)) {
+        g_debug("fart_recognize: invalid image args (w=%d h=%d c=%d)", width, height, channels);
+        return RECOGNITION_FAIL;
+    }
 
     cv::Mat image(height, width,
                   (channels == 1) ? CV_8UC1 : CV_8UC(channels),
                   (void *)image_data);
 
-    return handle->instance->recognize_face(image);
+    if (image.empty()) {
+        g_debug("fart_recognize: constructed cv::Mat is empty (w=%d h=%d c=%d)", width, height, channels);
+        return RECOGNITION_FAIL;
+    }
+
+    RecognitionState st = handle->instance->recognize_face(image);
+    g_debug("fart_recognize: %d", (int)st);
+    return st;
 }
 
 int
 fart_is_enrolled(FaceAnalysisRecognition *handle)
 {
-    if (!handle || !handle->instance)
+    if (!handle) {
+        g_debug("fart_is_enrolled: handle is NULL");
         return 0;
+    }
 
-    return handle->instance->is_enrolled() ? 1 : 0;
+    if (!handle->instance) {
+        g_debug("fart_is_enrolled: handle->instance is NULL (handle=%p)", handle);
+        return 0;
+    }
+
+    int enrolled = handle->instance->is_enrolled() ? 1 : 0;
+    g_debug("fart_is_enrolled: %d", enrolled);
+    return enrolled;
 }
 
 } // extern "C"
