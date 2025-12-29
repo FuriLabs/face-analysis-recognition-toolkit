@@ -7,6 +7,7 @@
 #include <gst/gst.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "fart.h"
 
@@ -45,9 +46,9 @@ recognition_state_to_string(RecognitionState state)
 static gboolean
 update_label(gpointer data)
 {
-    char *state_msg = (char *)data;
-    gtk_label_set_text(GTK_LABEL(status_label), state_msg);
-    g_free(state_msg);
+    char *msg = (char *)data;
+    gtk_label_set_text(GTK_LABEL(status_label), msg);
+    g_free(msg);
     return FALSE;
 }
 
@@ -79,17 +80,31 @@ on_new_sample(GstElement *sink, gpointer user_data)
     GstMapInfo map;
     if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
         int channels = 3;
-        EnrollmentState enroll_state;
-        RecognitionState recog_state;
 
         if (!fart_is_enrolled(face_handle)) {
-            enroll_state = fart_enroll(face_handle, map.data, width, height, channels);
-            g_print("Enrollment state: %s\n", enrollment_state_to_string(enroll_state));
-            g_idle_add(update_label, g_strdup(enrollment_state_to_string(enroll_state)));
+            int progress = 0;
+            EnrollmentState enroll_state =
+                fart_enroll(face_handle, map.data, width, height, channels, &progress);
+
+            const char *st = enrollment_state_to_string(enroll_state);
+
+            if (enroll_state == ENROLLMENT_IN_PROGRESS) {
+                g_print("Enrollment state: %s (%d%%)\n", st, progress);
+                g_idle_add(update_label, g_strdup_printf("%s (%d%%)", st, progress));
+            } else if (enroll_state == ENROLLMENT_COMPLETE) {
+                g_print("Enrollment state: %s (100%%)\n", st);
+                g_idle_add(update_label, g_strdup_printf("%s (100%%)", st));
+            } else {
+                g_print("Enrollment state: %s\n", st);
+                g_idle_add(update_label, g_strdup(st));
+            }
         } else {
-            recog_state = fart_recognize(face_handle, map.data, width, height, channels);
-            g_print("Recognition state: %s\n", recognition_state_to_string(recog_state));
-            g_idle_add(update_label, g_strdup(recognition_state_to_string(recog_state)));
+            RecognitionState recog_state =
+                fart_recognize(face_handle, map.data, width, height, channels);
+
+            const char *st = recognition_state_to_string(recog_state);
+            g_print("Recognition state: %s\n", st);
+            g_idle_add(update_label, g_strdup(st));
         }
 
         gst_buffer_unmap(buffer, &map);
@@ -97,6 +112,16 @@ on_new_sample(GstElement *sink, gpointer user_data)
 
     gst_sample_unref(sample);
     return GST_FLOW_OK;
+}
+
+static char *
+make_faceauth_data_dir(void)
+{
+    const char *home = getenv("HOME");
+    if (!home || !*home)
+        return g_strdup(".");
+
+    return g_strdup_printf("%s/.local/share/faceauth", home);
 }
 
 int
@@ -118,7 +143,12 @@ main(int argc, char *argv[])
     const char *detection_model = "models/detect-class1.tflite";
     const char *recognition_model = "models/mobile_face_net.tflite";
 
-    face_handle = fart_create(detection_model, recognition_model);
+    char *data_dir = make_faceauth_data_dir();
+    g_print("Using face data dir: %s\n", data_dir);
+
+    face_handle = fart_create(detection_model, recognition_model, data_dir);
+    g_free(data_dir);
+
     if (!face_handle) {
         fprintf(stderr, "Failed to create face detector\n");
         return EXIT_FAILURE;

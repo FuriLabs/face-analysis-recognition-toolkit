@@ -21,7 +21,9 @@ struct FaceAnalysisRecognition {
 extern "C" {
 
 FaceAnalysisRecognition *
-fart_create(const char *detection_model, const char *recognition_model)
+fart_create(const char *detection_model,
+            const char *recognition_model,
+            const char *data_dir)
 {
     if (!detection_model) {
         g_debug("fart_create: detection_model is NULL");
@@ -29,6 +31,14 @@ fart_create(const char *detection_model, const char *recognition_model)
     }
     if (!recognition_model) {
         g_debug("fart_create: recognition_model is NULL");
+        return nullptr;
+    }
+    if (!data_dir) {
+        g_debug("fart_create: data_dir is NULL");
+        return nullptr;
+    }
+    if (data_dir[0] == '\0') {
+        g_debug("fart_create: data_dir is empty");
         return nullptr;
     }
 
@@ -40,7 +50,8 @@ fart_create(const char *detection_model, const char *recognition_model)
 
     try {
         handle->instance = new FaceDetector(std::string(detection_model),
-                                            std::string(recognition_model));
+                                            std::string(recognition_model),
+                                            std::string(data_dir));
     } catch (const std::exception &e) {
         std::cerr << "Error in fart_create: " << e.what() << std::endl;
         g_debug("fart_create: exception creating FaceDetector: %s", e.what());
@@ -58,7 +69,8 @@ fart_create(const char *detection_model, const char *recognition_model)
         return nullptr;
     }
 
-    g_debug("fart_create: created handle=%p instance=%p", handle, handle->instance);
+    g_debug("fart_create: created handle=%p instance=%p data_dir=%s",
+            handle, handle->instance, data_dir);
     return handle;
 }
 
@@ -180,8 +192,12 @@ fart_free_faces(Face *faces)
 EnrollmentState
 fart_enroll(FaceAnalysisRecognition *handle,
             const unsigned char *image_data,
-            int width, int height, int channels)
+            int width, int height, int channels,
+            int *out_progress)
 {
+    if (out_progress)
+        *out_progress = 0;
+
     if (!handle) {
         g_debug("fart_enroll: handle is NULL");
         return ENROLLMENT_FAIL;
@@ -206,8 +222,13 @@ fart_enroll(FaceAnalysisRecognition *handle,
         return ENROLLMENT_FAIL;
     }
 
-    EnrollmentState st = handle->instance->enroll_face(image);
-    g_debug("fart_enroll: %d", (int)st);
+    EnrollmentState st = handle->instance->enroll_face(image, out_progress);
+
+    if (out_progress)
+        g_debug("fart_enroll: state=%d progress=%d", (int)st, *out_progress);
+    else
+        g_debug("fart_enroll: state=%d", (int)st);
+
     return st;
 }
 

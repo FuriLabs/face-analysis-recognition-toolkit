@@ -24,12 +24,17 @@ namespace fs = std::filesystem;
 
 FaceDetector::FaceDetector(const std::string& detection_model_path,
                            const std::string& recognition_model_path,
+                           const std::string& data_dir,
                            float min_confidence,
                            float max_distance)
     : min_confidence_(min_confidence),
       max_distance_(max_distance)
 {
     g_debug("Initializing FaceDetector...");
+
+    if (data_dir.empty())
+        throw std::runtime_error("data_dir is empty");
+    data_dir_ = fs::path(data_dir);
 
     detection_model_ = tflite::FlatBufferModel::BuildFromFile(detection_model_path.c_str());
     if (!detection_model_)
@@ -331,8 +336,11 @@ FaceDetector::get_max_distance() const
 }
 
 EnrollmentState
-FaceDetector::enroll_face(const cv::Mat& frame)
+FaceDetector::enroll_face(const cv::Mat& frame, int *out_progress)
 {
+    if (out_progress)
+        *out_progress = 0;
+
     std::vector<DetectedFace> faces = detect_faces(frame);
     if (faces.size() != 1) {
         if (faces.size() > 1) {
@@ -381,13 +389,26 @@ FaceDetector::enroll_face(const cv::Mat& frame)
         int save_status = save_enrolled_face();
         if (!save_status) {
             g_debug("Enrollment complete, but failed to save enrolled face");
+            if (out_progress)
+                *out_progress = 0;
             return ENROLLMENT_SAVE_FAILED;
         }
+
+        if (out_progress)
+            *out_progress = 100;
 
         g_debug("Enrollment complete");
         return ENROLLMENT_COMPLETE;
     } else {
         int progress = (count * 100) / 10;
+        if (progress < 0)
+            progress = 0;
+        if (progress > 99)
+            progress = 99;
+
+        if (out_progress)
+            *out_progress = progress;
+
         g_debug("Enrollment progress: %d%%", progress);
         return ENROLLMENT_IN_PROGRESS;
     }
@@ -515,13 +536,7 @@ FaceDetector::load_enrolled_face()
 }
 
 fs::path
-FaceDetector::get_data_dir()
+FaceDetector::get_data_dir() const
 {
-    const char *home = std::getenv("HOME");
-    if (!home)
-        throw std::runtime_error("Could not determine HOME directory");
-
-    fs::path data_dir(home);
-    data_dir /= ".local/share/faceauth";
-    return data_dir;
+    return data_dir_;
 }

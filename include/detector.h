@@ -10,6 +10,7 @@
 #include <mutex>
 #include <vector>
 #include <filesystem>
+#include <string>
 
 #include <opencv2/core.hpp>
 
@@ -34,6 +35,7 @@ public:
 
     FaceDetector(const std::string& detection_model_path,
                  const std::string& recognition_model_path,
+                 const std::string& data_dir,
                  float min_confidence = 0.5f,
                  float max_distance = 0.7f);
 
@@ -59,7 +61,7 @@ public:
     get_max_distance() const;
 
     EnrollmentState
-    enroll_face(const cv::Mat& frame);
+    enroll_face(const cv::Mat& frame, int *out_progress);
 
     RecognitionState
     recognize_face(const cv::Mat& frame);
@@ -95,6 +97,8 @@ private:
     std::vector<std::vector<float>> pending_enrollments_;
     std::vector<float> enrolled_embedding_;
 
+    std::filesystem::path data_dir_;
+
     void
     create_brightness_test();
 
@@ -108,7 +112,7 @@ private:
     load_enrolled_face();
 
     std::filesystem::path
-    get_data_dir();
+    get_data_dir() const;
 };
 
 #endif // DETECTOR_H

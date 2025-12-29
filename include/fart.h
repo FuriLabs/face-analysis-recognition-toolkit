@@ -31,10 +31,13 @@ typedef struct FaceAnalysisRecognition FaceAnalysisRecognition;
 /*
  * Create and initialize a FaceDetector instance.
  * 'detection_model' and 'recognition_model' are paths to the TFLite model files.
+ * 'data_dir' is the directory used for persistent face data (enrolled_face.json).
  * Returns a valid handle on success or NULL on failure.
  */
 FaceAnalysisRecognition *
-fart_create(const char *detection_model, const char *recognition_model);
+fart_create(const char *detection_model,
+            const char *recognition_model,
+            const char *data_dir);
 
 /*
  * Destroy the FaceDetector instance.
@@ -60,13 +63,14 @@ fart_free_faces(Face *faces);
 
 /*
  * Enroll a face from an image.
- * If no face is enrolled, it performs enrollment.
+ * out_progress (optional) receives [0..100] enrollment percentage.
  * Returns an EnrollmentState value.
  */
 EnrollmentState
 fart_enroll(FaceAnalysisRecognition *handle,
             const unsigned char *image_data,
-            int width, int height, int channels);
+            int width, int height, int channels,
+            int *out_progress);
 
 /*
  * Recognize a face from an image.
