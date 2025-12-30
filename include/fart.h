@@ -90,7 +90,7 @@ int
 fart_is_enrolled(FaceAnalysisRecognition *handle);
 
 #ifdef __cplusplus
-}
+} // extern "C"
 #endif
 
 #endif // FART_H

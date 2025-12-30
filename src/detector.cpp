@@ -4,6 +4,7 @@
  */
 
 #include "detector.h"
+#include "gbinder_helper.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -35,6 +36,9 @@ FaceDetector::FaceDetector(const std::string& detection_model_path,
     if (data_dir.empty())
         throw std::runtime_error("data_dir is empty");
     data_dir_ = fs::path(data_dir);
+
+    if (!find_hal("android.hardware.neuralnetworks"))
+        throw std::runtime_error("Neural Networks HAL not found in hwservicemanager");
 
     detection_model_ = tflite::FlatBufferModel::BuildFromFile(detection_model_path.c_str());
     if (!detection_model_)
