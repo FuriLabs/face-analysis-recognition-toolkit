@@ -16,7 +16,8 @@ extern "C" {
  * State values representing the current enrollment state.
  */
 typedef enum {
-    ENROLLMENT_FAIL = 0,          /**< Enrollment failed */
+    ENROLLMENT_IDLE = 0,          /**< No enrollment in progress */
+    ENROLLMENT_FAIL,              /**< Enrollment failed */
     ENROLLMENT_IN_PROGRESS,       /**< Enrollment in progress */
     ENROLLMENT_COMPLETE,          /**< Enrollment is complete */
     ENROLLMENT_SAVE_FAILED,       /**< Enrollment complete, but saving failed */
@@ -31,7 +32,8 @@ typedef enum {
  * State values representing the current recognition result.
  */
 typedef enum {
-    RECOGNITION_FAIL = 0,         /**< Recognition failed */
+    RECOGNITION_IDLE = 0,         /**< No recognition in progress */
+    RECOGNITION_FAIL,             /**< Recognition failed */
     RECOGNITION_NO_FACE,          /**< No face detected */
     RECOGNITION_MULTIPLE_FACES,   /**< Multiple faces detected */
     RECOGNITION_NOT_ENROLLED,     /**< No face has been enrolled */
