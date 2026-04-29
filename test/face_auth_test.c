@@ -18,6 +18,7 @@ static const char *
 enrollment_state_to_string(EnrollmentState state)
 {
     switch (state) {
+        case ENROLLMENT_IDLE: return "ENROLLMENT_IDLE";
         case ENROLLMENT_FAIL: return "ENROLLMENT_FAIL";
         case ENROLLMENT_IN_PROGRESS: return "ENROLLMENT_IN_PROGRESS";
         case ENROLLMENT_COMPLETE: return "ENROLLMENT_COMPLETE";
@@ -33,6 +34,7 @@ static const char *
 recognition_state_to_string(RecognitionState state)
 {
     switch (state) {
+        case RECOGNITION_IDLE: return "RECOGNITION_IDLE";
         case RECOGNITION_FAIL: return "RECOGNITION_FAIL";
         case RECOGNITION_NO_FACE: return "RECOGNITION_NO_FACE";
         case RECOGNITION_MULTIPLE_FACES: return "RECOGNITION_MULTIPLE_FACES";
