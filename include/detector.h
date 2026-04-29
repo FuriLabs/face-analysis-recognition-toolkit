@@ -35,7 +35,8 @@ public:
 
     FaceDetector(const std::string& detection_model_path,
                  const std::string& recognition_model_path,
-                 const std::string& data_dir,
+                 const char *data_dir,
+                 const char *enrollment_json,
                  float min_confidence = 0.5f,
                  float max_distance = 0.7f);
 
@@ -69,6 +70,12 @@ public:
     bool
     is_enrolled() const;
 
+    std::string
+    export_enrollment_json() const;
+
+    int
+    import_enrollment_json(const std::string& enrollment_json);
+
 private:
     std::unique_ptr<tflite::FlatBufferModel> detection_model_;
     std::unique_ptr<tflite::Interpreter> detector_;
@@ -98,6 +105,11 @@ private:
     std::vector<float> enrolled_embedding_;
 
     std::filesystem::path data_dir_;
+    bool file_storage_enabled_ = false;
+
+    void
+    init_common(const std::string& detection_model_path,
+                const std::string& recognition_model_path);
 
     void
     create_brightness_test();

@@ -32,12 +32,19 @@ typedef struct FaceAnalysisRecognition FaceAnalysisRecognition;
  * Create and initialize a FaceDetector instance.
  * 'detection_model' and 'recognition_model' are paths to the TFLite model files.
  * 'data_dir' is the directory used for persistent face data (enrolled_face.json).
+ * 'enrollment_json' is optional in-memory enrollment data.
+ *
+ * Exactly one mode must be selected:
+ *   - data_dir != NULL and enrollment_json == NULL: file-based mode
+ *   - data_dir == NULL and enrollment_json != NULL: JSON/in-memory mode
+ *
  * Returns a valid handle on success or NULL on failure.
  */
 FaceAnalysisRecognition *
 fart_create(const char *detection_model,
             const char *recognition_model,
-            const char *data_dir);
+            const char *data_dir,
+            const char *enrollment_json);
 
 /*
  * Destroy the FaceDetector instance.
@@ -88,6 +95,28 @@ fart_recognize(FaceAnalysisRecognition *handle,
  */
 int
 fart_is_enrolled(FaceAnalysisRecognition *handle);
+
+/*
+ * Export current enrolled face data as a JSON string.
+ * Caller must free the returned string with fart_free_string().
+ * Returns NULL on failure or if handle is invalid.
+ */
+char *
+fart_export_enrollment_json(FaceAnalysisRecognition *handle);
+
+/*
+ * Import enrolled face data from a JSON string.
+ * Returns 1 on success; 0 otherwise.
+ */
+int
+fart_import_enrollment_json(FaceAnalysisRecognition *handle,
+                            const char *enrollment_json);
+
+/*
+ * Free a string returned by libfart.
+ */
+void
+fart_free_string(char *str);
 
 #ifdef __cplusplus
 } // extern "C"

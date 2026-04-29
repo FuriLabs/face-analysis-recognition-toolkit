@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 #include <glib.h>
@@ -25,18 +26,49 @@ namespace fs = std::filesystem;
 
 FaceDetector::FaceDetector(const std::string& detection_model_path,
                            const std::string& recognition_model_path,
-                           const std::string& data_dir,
+                           const char *data_dir,
+                           const char *enrollment_json,
                            float min_confidence,
                            float max_distance)
     : min_confidence_(min_confidence),
       max_distance_(max_distance)
 {
-    g_debug("Initializing FaceDetector...");
+    gboolean has_data_dir = data_dir && data_dir[0] != '\0';
+    gboolean has_json = enrollment_json != nullptr;
 
-    if (data_dir.empty())
-        throw std::runtime_error("data_dir is empty");
-    data_dir_ = fs::path(data_dir);
+    if (has_data_dir == has_json)
+        throw std::runtime_error("Exactly one of data_dir or enrollment_json must be provided");
 
+    file_storage_enabled_ = has_data_dir ? true : false;
+
+    if (file_storage_enabled_) {
+        g_debug("Initializing FaceDetector in file storage mode...");
+
+        data_dir_ = fs::path(data_dir);
+        if (data_dir_.empty())
+            throw std::runtime_error("data_dir is empty");
+    } else {
+        g_debug("Initializing FaceDetector in JSON storage mode...");
+        data_dir_.clear();
+    }
+
+    init_common(detection_model_path, recognition_model_path);
+
+    if (file_storage_enabled_) {
+        int load_status = load_enrolled_face();
+        fs::path enrollment_file = get_data_dir() / "enrolled_face.json";
+        if (fs::exists(enrollment_file) && load_status == 0)
+            throw std::runtime_error("Failed to load enrolled face data");
+    } else if (enrollment_json && enrollment_json[0] != '\0') {
+        if (!import_enrollment_json(std::string(enrollment_json)))
+            throw std::runtime_error("Failed to import enrollment JSON");
+    }
+}
+
+void
+FaceDetector::init_common(const std::string& detection_model_path,
+                          const std::string& recognition_model_path)
+{
     if (!find_hal("android.hardware.neuralnetworks"))
         throw std::runtime_error("Neural Networks HAL not found in hwservicemanager");
 
@@ -106,11 +138,6 @@ FaceDetector::FaceDetector(const std::string& detection_model_path,
     recog_output_index_ = recognizer_->outputs()[0];
 
     create_brightness_test();
-
-    int load_status = load_enrolled_face();
-    fs::path enrollment_file = get_data_dir() / "enrolled_face.json";
-    if (fs::exists(enrollment_file) && load_status == 0)
-        throw std::runtime_error("Failed to load enrolled face data");
 }
 
 FaceDetector::~FaceDetector()
@@ -489,9 +516,49 @@ FaceDetector::normalize_vector(const std::vector<float>& vec)
     return normalized;
 }
 
+std::string
+FaceDetector::export_enrollment_json() const
+{
+    try {
+        if (enrolled_embedding_.empty())
+            return std::string();
+
+        json j = enrolled_embedding_;
+        return j.dump();
+    } catch (const std::exception& e) {
+        g_debug("Error exporting enrollment JSON: %s", e.what());
+        return std::string();
+    }
+}
+
+int
+FaceDetector::import_enrollment_json(const std::string& enrollment_json)
+{
+    try {
+        if (enrollment_json.empty()) {
+            enrolled_embedding_.clear();
+            return 1;
+        }
+
+        json j = json::parse(enrollment_json);
+        enrolled_embedding_ = j.get<std::vector<float>>();
+        g_debug("Imported enrolled face from JSON string");
+        return 1;
+    } catch (const std::exception& e) {
+        g_debug("Error importing enrollment JSON: %s", e.what());
+        enrolled_embedding_.clear();
+        return 0;
+    }
+}
+
 int
 FaceDetector::save_enrolled_face()
 {
+    if (!file_storage_enabled_) {
+        g_debug("Enrollment stored in memory only; caller must export JSON");
+        return 1;
+    }
+
     try {
         json j = enrolled_embedding_;
         fs::path data_dir = get_data_dir();
@@ -515,6 +582,9 @@ FaceDetector::save_enrolled_face()
 int
 FaceDetector::load_enrolled_face()
 {
+    if (!file_storage_enabled_)
+        return 1;
+
     try {
         fs::path data_dir = get_data_dir();
         fs::path enrollment_file = data_dir / "enrolled_face.json";

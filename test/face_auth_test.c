@@ -146,7 +146,13 @@ main(int argc, char *argv[])
     char *data_dir = make_faceauth_data_dir();
     g_print("Using face data dir: %s\n", data_dir);
 
-    face_handle = fart_create(detection_model, recognition_model, data_dir);
+    if (g_mkdir_with_parents(data_dir, 0700) != 0) {
+        fprintf(stderr, "Failed to create face data dir: %s\n", data_dir);
+        g_free(data_dir);
+        return EXIT_FAILURE;
+    }
+
+    face_handle = fart_create(detection_model, recognition_model, data_dir, NULL);
     g_free(data_dir);
 
     if (!face_handle) {

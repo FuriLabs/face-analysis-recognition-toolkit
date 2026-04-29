@@ -23,7 +23,8 @@ extern "C" {
 FaceAnalysisRecognition *
 fart_create(const char *detection_model,
             const char *recognition_model,
-            const char *data_dir)
+            const char *data_dir,
+            const char *enrollment_json)
 {
     if (!detection_model) {
         g_debug("fart_create: detection_model is NULL");
@@ -33,12 +34,12 @@ fart_create(const char *detection_model,
         g_debug("fart_create: recognition_model is NULL");
         return nullptr;
     }
-    if (!data_dir) {
-        g_debug("fart_create: data_dir is NULL");
-        return nullptr;
-    }
-    if (data_dir[0] == '\0') {
-        g_debug("fart_create: data_dir is empty");
+
+    gboolean has_data_dir = data_dir && data_dir[0] != '\0';
+    gboolean has_json = enrollment_json != nullptr;
+
+    if (has_data_dir == has_json) {
+        g_debug("fart_create: exactly one of data_dir or enrollment_json must be provided");
         return nullptr;
     }
 
@@ -51,7 +52,8 @@ fart_create(const char *detection_model,
     try {
         handle->instance = new FaceDetector(std::string(detection_model),
                                             std::string(recognition_model),
-                                            std::string(data_dir));
+                                            has_data_dir ? data_dir : nullptr,
+                                            has_json ? enrollment_json : nullptr);
     } catch (const std::exception &e) {
         std::cerr << "Error in fart_create: " << e.what() << std::endl;
         g_debug("fart_create: exception creating FaceDetector: %s", e.what());
@@ -69,8 +71,8 @@ fart_create(const char *detection_model,
         return nullptr;
     }
 
-    g_debug("fart_create: created handle=%p instance=%p data_dir=%s",
-            handle, handle->instance, data_dir);
+    g_debug("fart_create: created handle=%p instance=%p mode=%s",
+            handle, handle->instance, has_data_dir ? "file" : "json");
     return handle;
 }
 
@@ -282,6 +284,61 @@ fart_is_enrolled(FaceAnalysisRecognition *handle)
     int enrolled = handle->instance->is_enrolled() ? 1 : 0;
     g_debug("fart_is_enrolled: %d", enrolled);
     return enrolled;
+}
+
+char *
+fart_export_enrollment_json(FaceAnalysisRecognition *handle)
+{
+    if (!handle) {
+        g_debug("fart_export_enrollment_json: handle is NULL");
+        return nullptr;
+    }
+
+    if (!handle->instance) {
+        g_debug("fart_export_enrollment_json: handle->instance is NULL (handle=%p)", handle);
+        return nullptr;
+    }
+
+    std::string enrollment_json = handle->instance->export_enrollment_json();
+    char *out = (char *)std::malloc(enrollment_json.size() + 1);
+    if (!out)
+        return nullptr;
+
+    std::memcpy(out, enrollment_json.c_str(), enrollment_json.size() + 1);
+    return out;
+}
+
+int
+fart_import_enrollment_json(FaceAnalysisRecognition *handle,
+                            const char *enrollment_json)
+{
+    if (!handle) {
+        g_debug("fart_import_enrollment_json: handle is NULL");
+        return 0;
+    }
+
+    if (!handle->instance) {
+        g_debug("fart_import_enrollment_json: handle->instance is NULL (handle=%p)", handle);
+        return 0;
+    }
+
+    if (!enrollment_json) {
+        g_debug("fart_import_enrollment_json: enrollment_json is NULL");
+        return 0;
+    }
+
+    return handle->instance->import_enrollment_json(std::string(enrollment_json));
+}
+
+void
+fart_free_string(char *str)
+{
+    if (!str) {
+        g_debug("fart_free_string: str is NULL");
+        return;
+    }
+
+    std::free(str);
 }
 
 } // extern "C"
