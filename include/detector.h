@@ -52,7 +52,7 @@ public:
     extract_face(const cv::Mat& image, const cv::Rect& bbox);
 
     int
-    check_brightness(const std::vector<float>& embedding);
+    check_brightness(const cv::Mat& face_image);
 
     float
     compare_embeddings(const std::vector<float>& embedding1,
@@ -95,9 +95,6 @@ private:
     float min_confidence_ = 0.5f;
     float max_distance_ = 0.7f;
 
-    std::vector<float> brightness_test_white_;
-    std::vector<float> brightness_test_black_;
-
     std::mutex detector_mutex_;
     std::mutex recognizer_mutex_;
 
@@ -110,9 +107,6 @@ private:
     void
     init_common(const std::string& detection_model_path,
                 const std::string& recognition_model_path);
-
-    void
-    create_brightness_test();
 
     std::vector<float>
     normalize_vector(const std::vector<float>& vec);

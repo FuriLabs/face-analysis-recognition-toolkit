@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -136,8 +137,6 @@ FaceDetector::init_common(const std::string& detection_model_path,
 
     recog_input_index_ = recognizer_->inputs()[0];
     recog_output_index_ = recognizer_->outputs()[0];
-
-    create_brightness_test();
 }
 
 FaceDetector::~FaceDetector()
@@ -164,7 +163,6 @@ FaceDetector::detect_faces(const cv::Mat& image)
     std::lock_guard<std::mutex> lock(detector_mutex_);
 
     try {
-        /* incorrect to hell and back. but it works! */
         cv::Mat resized_image;
         cv::resize(image, resized_image, cv::Size(FD_INPUT_SIZE, FD_INPUT_SIZE));
 
@@ -219,8 +217,15 @@ FaceDetector::detect_faces(const cv::Mat& image)
             return {};
         }
 
+        int detection_count = 10;
+        if (scores_tensor->dims && scores_tensor->dims->size > 0) {
+            int last_dim = scores_tensor->dims->data[scores_tensor->dims->size - 1];
+            if (last_dim > 0)
+                detection_count = last_dim;
+        }
+
         std::vector<DetectedFace> detected_faces;
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < detection_count; i++) {
             if (scores_data[i] >= min_confidence_) {
                 /* i don't even know at this point */
                 float ymin = boxes_data[i * 4];
@@ -233,13 +238,22 @@ FaceDetector::detect_faces(const cv::Mat& image)
                 int ymin_px = (int)(ymin * height);
                 int ymax_px = (int)(ymax * height);
 
+                cv::Rect rect(xmin_px, ymin_px,
+                              xmax_px - xmin_px,
+                              ymax_px - ymin_px);
+                rect &= cv::Rect(0, 0, width, height);
+
+                if (rect.width <= 0 || rect.height <= 0) {
+                    g_debug("Ignoring invalid face rect: [%d, %d, %d, %d] score=%f",
+                            xmin_px, ymin_px, xmax_px, ymax_px, scores_data[i]);
+                    continue;
+                }
+
                 g_debug("Face detected: [%d, %d, %d, %d] score=%f",
-                        xmin_px, ymin_px, xmax_px, ymax_px, scores_data[i]);
+                        rect.x, rect.y, rect.x + rect.width, rect.y + rect.height, scores_data[i]);
 
                 DetectedFace face;
-                face.bbox = cv::Rect(xmin_px, ymin_px,
-                                     xmax_px - xmin_px,
-                                     ymax_px - ymin_px);
+                face.bbox = rect;
                 face.confidence = scores_data[i];
                 detected_faces.push_back(face);
             }
@@ -325,29 +339,67 @@ FaceDetector::extract_face(const cv::Mat& image, const cv::Rect& bbox)
     return image(safe_rect);
 }
 
-/* likely very broken */
 int
-FaceDetector::check_brightness(const std::vector<float>& embedding)
+FaceDetector::check_brightness(const cv::Mat& face_image)
 {
-    if (embedding.empty())
+    if (face_image.empty())
         return 0;
 
-    float white_distance = compare_embeddings(embedding, brightness_test_white_);
-    float black_distance = compare_embeddings(embedding, brightness_test_black_);
-    g_debug("Brightness test: White: %f, Black: %f", white_distance, black_distance);
-
-    if (white_distance < 0.5f || black_distance < 0.4f)
-        return -1; // Bad lighting
-    else if (white_distance + black_distance < 2.2f)
-        return 0; // Suboptimal
+    cv::Mat gray;
+    if (face_image.channels() == 1)
+        gray = face_image;
+    else if (face_image.channels() == 4)
+        cv::cvtColor(face_image, gray, cv::COLOR_BGRA2GRAY);
     else
-        return 1; // Optimal
+        cv::cvtColor(face_image, gray, cv::COLOR_BGR2GRAY);
+
+    cv::Scalar mean;
+    cv::Scalar stddev;
+    cv::meanStdDev(gray, mean, stddev);
+
+    double brightness = mean[0];
+    double contrast = stddev[0];
+
+    int total_pixels = gray.rows * gray.cols;
+    if (total_pixels <= 0)
+        return 0;
+
+    cv::Mat dark_mask;
+    cv::Mat bright_mask;
+    cv::compare(gray, 35, dark_mask, cv::CMP_LT);
+    cv::compare(gray, 240, bright_mask, cv::CMP_GT);
+
+    int dark_pixels = cv::countNonZero(dark_mask);
+    int bright_pixels = cv::countNonZero(bright_mask);
+
+    double dark_ratio = (double)dark_pixels / (double)total_pixels;
+    double bright_ratio = (double)bright_pixels / (double)total_pixels;
+
+    g_debug("Lighting check: brightness=%f contrast=%f dark_ratio=%f bright_ratio=%f",
+            brightness, contrast, dark_ratio, bright_ratio);
+
+    if (brightness < 45.0 || dark_ratio > 0.45)
+        return -1; // Bad lighting
+
+    if (brightness > 210.0 || bright_ratio > 0.35)
+        return -1; // Bad lighting
+
+    if (contrast < 25.0)
+        return 0; // Suboptimal
+
+    return 1; // Optimal
 }
 
 float
 FaceDetector::compare_embeddings(const std::vector<float>& embedding1,
                                  const std::vector<float>& embedding2)
 {
+    if (embedding1.empty() || embedding2.empty())
+        return std::numeric_limits<float>::max();
+
+    if (embedding1.size() != embedding2.size())
+        return std::numeric_limits<float>::max();
+
     std::vector<float> norm1 = normalize_vector(embedding1);
     std::vector<float> norm2 = normalize_vector(embedding2);
 
@@ -389,16 +441,16 @@ FaceDetector::enroll_face(const cv::Mat& frame, int *out_progress)
         return ENROLLMENT_FAIL;
     }
 
+    int brightness = check_brightness(face_img);
+    if (brightness < 1) {
+        g_debug((brightness == -1) ? "Poor lighting conditions" : "Suboptimal lighting");
+        return ENROLLMENT_BAD_LIGHTING;
+    }
+
     std::vector<float> embedding = get_face_embedding(face_img);
     if (embedding.empty()) {
         g_debug("Failed to generate face embedding");
         return ENROLLMENT_FAIL;
-    }
-
-    int brightness = check_brightness(embedding);
-    if (brightness < 1) {
-        g_debug((brightness == -1) ? "Poor lighting conditions" : "Suboptimal lighting");
-        return ENROLLMENT_BAD_LIGHTING;
     }
 
     pending_enrollments_.push_back(embedding);
@@ -414,7 +466,7 @@ FaceDetector::enroll_face(const cv::Mat& frame, int *out_progress)
         for (size_t i = 0; i < avg.size(); i++)
             avg[i] /= (float)count;
 
-        enrolled_embedding_ = avg;
+        enrolled_embedding_ = normalize_vector(avg);
         pending_enrollments_.clear();
 
         int save_status = save_enrolled_face();
@@ -488,16 +540,6 @@ FaceDetector::is_enrolled() const
     return !enrolled_embedding_.empty();
 }
 
-void
-FaceDetector::create_brightness_test()
-{
-    cv::Mat white_img(FR_INPUT_SIZE, FR_INPUT_SIZE, CV_8UC3, cv::Scalar(255, 255, 255));
-    brightness_test_white_ = get_face_embedding(white_img);
-
-    cv::Mat black_img(FR_INPUT_SIZE, FR_INPUT_SIZE, CV_8UC3, cv::Scalar(0, 0, 0));
-    brightness_test_black_ = get_face_embedding(black_img);
-}
-
 std::vector<float>
 FaceDetector::normalize_vector(const std::vector<float>& vec)
 {
@@ -541,7 +583,7 @@ FaceDetector::import_enrollment_json(const std::string& enrollment_json)
         }
 
         json j = json::parse(enrollment_json);
-        enrolled_embedding_ = j.get<std::vector<float>>();
+        enrolled_embedding_ = normalize_vector(j.get<std::vector<float>>());
         g_debug("Imported enrolled face from JSON string");
         return 1;
     } catch (const std::exception& e) {
@@ -598,7 +640,7 @@ FaceDetector::load_enrolled_face()
 
         json j;
         file >> j;
-        enrolled_embedding_ = j.get<std::vector<float>>();
+        enrolled_embedding_ = normalize_vector(j.get<std::vector<float>>());
         file.close();
         g_debug("Loaded enrolled face from %s", enrollment_file.string().c_str());
         return 1;
