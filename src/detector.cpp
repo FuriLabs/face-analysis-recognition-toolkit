@@ -224,6 +224,8 @@ FaceDetector::detect_faces(const cv::Mat& image)
                 detection_count = last_dim;
         }
 
+        g_debug("Detection count from tensor: %d", detection_count);
+
         std::vector<DetectedFace> detected_faces;
         for (int i = 0; i < detection_count; i++) {
             if (scores_data[i] >= min_confidence_) {
