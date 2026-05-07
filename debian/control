@@ -21,7 +21,7 @@ Vcs-Git: https://github.com/furilabs/face-analysis-recognition-toolkit.git
 Package: libfart
 Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends},
-Description: libpq
+Description: libfart
  Face analysis recognition toolkit shared object
 
 Package: libfart-dev
