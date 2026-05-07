@@ -3,11 +3,11 @@ Upstream-Name: face-analysis-recognition-toolkit
 Source: https://github.com/furilabs/face-analysis-recognition-toolkit.git
 
 Files: *
-Copyright: 2025 Bardia Moshiri <bardia@furilabs.com>
+Copyright: 2026 Bardia Moshiri <bardia@furilabs.com>
 License: GPLv2
 
 Files: debian/*
-Copyright: 2025 Bardia Moshiri <bardia@furilabs.com>
+Copyright: 2026 Bardia Moshiri <bardia@furilabs.com>
 License: BSD-3-clause
 
 License: BSD-3-clause
