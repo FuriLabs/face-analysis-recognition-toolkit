@@ -27,6 +27,7 @@ namespace fs = std::filesystem;
 
 FaceDetector::FaceDetector(const std::string& detection_model_path,
                            const std::string& recognition_model_path,
+                           const std::string& anti_spoof_model_path,
                            const char *data_dir,
                            const char *enrollment_json,
                            float min_confidence,
@@ -53,7 +54,7 @@ FaceDetector::FaceDetector(const std::string& detection_model_path,
         data_dir_.clear();
     }
 
-    init_common(detection_model_path, recognition_model_path);
+    init_common(detection_model_path, recognition_model_path, anti_spoof_model_path);
 
     if (file_storage_enabled_) {
         int load_status = load_enrolled_face();
@@ -68,7 +69,8 @@ FaceDetector::FaceDetector(const std::string& detection_model_path,
 
 void
 FaceDetector::init_common(const std::string& detection_model_path,
-                          const std::string& recognition_model_path)
+                          const std::string& recognition_model_path,
+                          const std::string& anti_spoof_model_path)
 {
     if (!find_hal("android.hardware.neuralnetworks"))
         throw std::runtime_error("Neural Networks HAL not found in hwservicemanager");
@@ -124,6 +126,44 @@ FaceDetector::init_common(const std::string& detection_model_path,
     if (recognizer_->AllocateTensors() != kTfLiteOk)
         throw std::runtime_error("Failed to allocate tensors for recognition model");
 
+    if (!anti_spoof_model_path.empty()) {
+        g_debug("Anti-spoof model path provided, loading anti-spoof model...");
+
+        anti_spoof_model_ = tflite::FlatBufferModel::BuildFromFile(anti_spoof_model_path.c_str());
+        if (!anti_spoof_model_)
+            throw std::runtime_error("Failed to load anti-spoof model");
+
+        tflite::InterpreterBuilder(*anti_spoof_model_, resolver)(&anti_spoofer_);
+        if (!anti_spoofer_)
+            throw std::runtime_error("Failed to build anti-spoof interpreter");
+
+        nnapi_spoof_delegate_ = TfLiteNnapiDelegateCreate(&nnapi_options);
+        if (!nnapi_spoof_delegate_) {
+            g_debug("Failed to create NNAPI delegate for anti-spoof model, falling back to CPU");
+        } else {
+            g_debug("Using NNAPI delegate for anti-spoof model");
+            if (anti_spoofer_->ModifyGraphWithDelegate(nnapi_spoof_delegate_) != kTfLiteOk) {
+                g_debug("Failed to apply NNAPI delegate to anti-spoof model, falling back to CPU");
+                TfLiteNnapiDelegateDelete(nnapi_spoof_delegate_);
+                nnapi_spoof_delegate_ = nullptr;
+            }
+        }
+
+        if (anti_spoofer_->AllocateTensors() != kTfLiteOk)
+            throw std::runtime_error("Failed to allocate tensors for anti-spoof model");
+
+        spoof_input_index_ = anti_spoofer_->inputs()[0];
+        spoof_output_index_ = anti_spoofer_->outputs()[0];
+        anti_spoof_enabled_ = true;
+
+        g_debug("Anti-spoof inputs: %d", (int)anti_spoofer_->inputs().size());
+        g_debug("Anti-spoof outputs: %d", (int)anti_spoofer_->outputs().size());
+        g_debug("Anti-spoof model enabled");
+    } else {
+        g_debug("No anti-spoof model path provided. anti-spoof check disabled");
+        anti_spoof_enabled_ = false;
+    }
+
     g_debug("Detector inputs: %d", (int)detector_->inputs().size());
     g_debug("Detector outputs: %d", (int)detector_->outputs().size());
 
@@ -148,6 +188,10 @@ FaceDetector::~FaceDetector()
     if (nnapi_recognition_delegate_) {
         TfLiteNnapiDelegateDelete(nnapi_recognition_delegate_);
         nnapi_recognition_delegate_ = nullptr;
+    }
+    if (nnapi_spoof_delegate_) {
+        TfLiteNnapiDelegateDelete(nnapi_spoof_delegate_);
+        nnapi_spoof_delegate_ = nullptr;
     }
 }
 
@@ -341,6 +385,71 @@ FaceDetector::extract_face(const cv::Mat& image, const cv::Rect& bbox)
     return image(safe_rect);
 }
 
+cv::Mat
+FaceDetector::extract_anti_spoof_face(const cv::Mat& image, const cv::Rect& bbox)
+{
+    if (image.empty())
+        return cv::Mat();
+
+    float box_w = (float)bbox.width;
+    float box_h = (float)bbox.height;
+
+    if (box_w <= 0.0f || box_h <= 0.0f)
+        return cv::Mat();
+
+    float src_w = (float)image.cols;
+    float src_h = (float)image.rows;
+
+    float scale = SPOOF_CROP_SCALE;
+    scale = std::min((src_h - 1.0f) / box_h,
+                     std::min((src_w - 1.0f) / box_w, scale));
+
+    float new_width = box_w * scale;
+    float new_height = box_h * scale;
+    float center_x = box_w / 2.0f + (float)bbox.x;
+    float center_y = box_h / 2.0f + (float)bbox.y;
+
+    float left_top_x = center_x - new_width / 2.0f;
+    float left_top_y = center_y - new_height / 2.0f;
+    float right_bottom_x = center_x + new_width / 2.0f;
+    float right_bottom_y = center_y + new_height / 2.0f;
+
+    if (left_top_x < 0.0f) {
+        right_bottom_x -= left_top_x;
+        left_top_x = 0.0f;
+    }
+
+    if (left_top_y < 0.0f) {
+        right_bottom_y -= left_top_y;
+        left_top_y = 0.0f;
+    }
+
+    if (right_bottom_x > src_w - 1.0f) {
+        left_top_x -= right_bottom_x - src_w + 1.0f;
+        right_bottom_x = src_w - 1.0f;
+    }
+
+    if (right_bottom_y > src_h - 1.0f) {
+        left_top_y -= right_bottom_y - src_h + 1.0f;
+        right_bottom_y = src_h - 1.0f;
+    }
+
+    cv::Rect crop_rect((int)left_top_x,
+                       (int)left_top_y,
+                       (int)(right_bottom_x - left_top_x + 1.0f),
+                       (int)(right_bottom_y - left_top_y + 1.0f));
+
+    crop_rect &= cv::Rect(0, 0, image.cols, image.rows);
+    if (crop_rect.width <= 0 || crop_rect.height <= 0)
+        return cv::Mat();
+
+    cv::Mat crop = image(crop_rect);
+    cv::Mat resized;
+    cv::resize(crop, resized, cv::Size(SPOOF_INPUT_SIZE, SPOOF_INPUT_SIZE));
+
+    return resized;
+}
+
 int
 FaceDetector::check_brightness(const cv::Mat& face_image)
 {
@@ -390,6 +499,172 @@ FaceDetector::check_brightness(const cv::Mat& face_image)
         return 0; // Suboptimal
 
     return 1; // Optimal
+}
+
+bool
+FaceDetector::is_live_face(const cv::Mat& image, const cv::Rect& bbox)
+{
+    if (!anti_spoof_enabled_ || !anti_spoofer_) {
+        g_debug("Anti-spoof check skipped");
+        return true;
+    }
+
+    if (image.empty())
+        return false;
+
+    std::lock_guard<std::mutex> lock(spoof_mutex_);
+
+    try {
+        cv::Mat spoof_img = extract_anti_spoof_face(image, bbox);
+        if (spoof_img.empty()) {
+            g_debug("Failed to extract anti-spoof face crop");
+            return false;
+        }
+
+        if (spoof_img.channels() == 1)
+            cv::cvtColor(spoof_img, spoof_img, cv::COLOR_GRAY2BGR);
+        else if (spoof_img.channels() == 4)
+            cv::cvtColor(spoof_img, spoof_img, cv::COLOR_BGRA2BGR);
+
+        TfLiteTensor *input_tensor = anti_spoofer_->tensor(spoof_input_index_);
+        if (!input_tensor) {
+            g_debug("Failed to get anti-spoof input tensor");
+            return false;
+        }
+
+        g_debug("Anti-spoof input tensor type: %d", input_tensor->type);
+
+        if (input_tensor->type == kTfLiteFloat32) {
+            float *input = anti_spoofer_->typed_input_tensor<float>(spoof_input_index_);
+            if (!input)
+                return false;
+
+            cv::Mat float_image;
+            spoof_img.convertTo(float_image, CV_32F);
+
+            std::memcpy(input,
+                        float_image.data,
+                        float_image.total() * float_image.elemSize());
+        } else if (input_tensor->type == kTfLiteUInt8) {
+            uint8_t *input = anti_spoofer_->typed_input_tensor<uint8_t>(spoof_input_index_);
+            if (!input)
+                return false;
+
+            std::memcpy(input,
+                        spoof_img.data,
+                        spoof_img.total() * spoof_img.elemSize());
+        } else {
+            g_debug("Unsupported anti-spoof input tensor type: %d", input_tensor->type);
+            return false;
+        }
+
+        g_debug("Running anti-spoof inference with %s...",
+                nnapi_spoof_delegate_ ? "NNAPI delegate" : "CPU");
+        if (anti_spoofer_->Invoke() != kTfLiteOk) {
+            g_debug("Failed to invoke anti-spoof model");
+            return false;
+        }
+
+        TfLiteTensor *output_tensor = anti_spoofer_->tensor(spoof_output_index_);
+        if (!output_tensor) {
+            g_debug("Failed to get anti-spoof output tensor");
+            return false;
+        }
+
+        g_debug("Anti-spoof output tensor type: %d", output_tensor->type);
+
+        int output_count = 1;
+        if (output_tensor->dims) {
+            output_count = 1;
+            for (int i = 0; i < output_tensor->dims->size; i++)
+                output_count *= output_tensor->dims->data[i];
+        }
+
+        if (output_count <= 0) {
+            g_debug("Invalid anti-spoof output count");
+            return false;
+        }
+
+        std::vector<float> output(output_count, 0.0f);
+
+        if (output_tensor->type == kTfLiteFloat32) {
+            const float *output_data = output_tensor->data.f;
+            if (!output_data)
+                return false;
+
+            for (int i = 0; i < output_count; i++)
+                output[i] = output_data[i];
+        } else if (output_tensor->type == kTfLiteUInt8) {
+            const uint8_t *output_data = output_tensor->data.uint8;
+            if (!output_data)
+                return false;
+
+            float scale = output_tensor->params.scale;
+            int zero_point = output_tensor->params.zero_point;
+
+            for (int i = 0; i < output_count; i++)
+                output[i] = ((int)output_data[i] - zero_point) * scale;
+        } else {
+            g_debug("Unsupported anti-spoof output tensor type: %d", output_tensor->type);
+            return false;
+        }
+
+        float max_logit = output[0];
+        for (int i = 1; i < output_count; i++) {
+            if (output[i] > max_logit)
+                max_logit = output[i];
+        }
+
+        float exp_sum = 0.0f;
+        std::vector<float> probs(output_count, 0.0f);
+
+        for (int i = 0; i < output_count; i++) {
+            probs[i] = std::exp(output[i] - max_logit);
+            exp_sum += probs[i];
+        }
+
+        if (exp_sum <= 0.0f) {
+            g_debug("Invalid anti-spoof softmax sum");
+            return false;
+        }
+
+        for (int i = 0; i < output_count; i++)
+            probs[i] /= exp_sum;
+
+        int label = 0;
+        float best_score = probs[0];
+
+        for (int i = 1; i < output_count; i++) {
+            if (probs[i] > best_score) {
+                best_score = probs[i];
+                label = i;
+            }
+        }
+
+        float real_score = 0.0f;
+        if (output_count > 1)
+            real_score = probs[1];
+        else
+            real_score = probs[0];
+
+        g_debug("Anti-spoof result: label=%d best_prob=%f real_prob=%f logits=[%f,%f,%f] output_count=%d threshold=%f",
+                label,
+                best_score,
+                real_score,
+                output_count > 0 ? output[0] : 0.0f,
+                output_count > 1 ? output[1] : 0.0f,
+                output_count > 2 ? output[2] : 0.0f,
+                output_count,
+                SPOOF_REAL_THRESHOLD);
+
+        if (output_count > 1)
+            return label == 1 && real_score >= SPOOF_REAL_THRESHOLD;
+
+        return real_score >= SPOOF_REAL_THRESHOLD;
+    } catch (const std::exception& e) {
+        g_debug("Exception in is_live_face: %s", e.what());
+        return false;
+    }
 }
 
 float
@@ -447,6 +722,11 @@ FaceDetector::enroll_face(const cv::Mat& frame, int *out_progress)
     if (brightness < 1) {
         g_debug((brightness == -1) ? "Poor lighting conditions" : "Suboptimal lighting");
         return ENROLLMENT_BAD_LIGHTING;
+    }
+
+    if (!is_live_face(frame, faces[0].bbox)) {
+        g_debug("Spoof face detected during enrollment");
+        return ENROLLMENT_FAIL;
     }
 
     std::vector<float> embedding = get_face_embedding(face_img);
@@ -517,6 +797,11 @@ FaceDetector::recognize_face(const cv::Mat& frame)
     if (face_img.empty()) {
         g_debug("Invalid face image extracted");
         return RECOGNITION_FAIL;
+    }
+
+    if (!is_live_face(frame, faces[0].bbox)) {
+        g_debug("Spoof face detected during recognition");
+        return RECOGNITION_NOT_RECOGNIZED;
     }
 
     std::vector<float> embedding = get_face_embedding(face_img);
@@ -599,7 +884,7 @@ int
 FaceDetector::save_enrolled_face()
 {
     if (!file_storage_enabled_) {
-        g_debug("Enrollment stored in memory only; caller must export JSON");
+        g_debug("Enrollment stored in memory only. caller must export JSON");
         return 1;
     }
 

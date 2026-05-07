@@ -11,8 +11,11 @@
 
 #include "fart.h"
 
+#define FACE_SUBMIT_INTERVAL_MS 200
+
 GtkWidget *status_label = NULL;
 static FaceAnalysisRecognition *face_handle = NULL;
+static gint64 last_submit_us = 0;
 
 static const char *
 enrollment_state_to_string(EnrollmentState state)
@@ -59,6 +62,13 @@ on_new_sample(GstElement *sink, gpointer user_data)
 {
     (void) user_data;
 
+    gint64 now_us = g_get_monotonic_time();
+    if (last_submit_us &&
+        now_us - last_submit_us < (gint64)FACE_SUBMIT_INTERVAL_MS * 1000)
+        return GST_FLOW_OK;
+
+    last_submit_us = now_us;
+
     GstSample *sample = NULL;
     g_signal_emit_by_name(sink, "pull-sample", &sample);
     if (!sample)
@@ -85,8 +95,7 @@ on_new_sample(GstElement *sink, gpointer user_data)
 
         if (!fart_is_enrolled(face_handle)) {
             int progress = 0;
-            EnrollmentState enroll_state =
-                fart_enroll(face_handle, map.data, width, height, channels, &progress);
+            EnrollmentState enroll_state = fart_enroll(face_handle, map.data, width, height, channels, &progress);
 
             const char *st = enrollment_state_to_string(enroll_state);
 
@@ -101,8 +110,7 @@ on_new_sample(GstElement *sink, gpointer user_data)
                 g_idle_add(update_label, g_strdup(st));
             }
         } else {
-            RecognitionState recog_state =
-                fart_recognize(face_handle, map.data, width, height, channels);
+            RecognitionState recog_state = fart_recognize(face_handle, map.data, width, height, channels);
 
             const char *st = recognition_state_to_string(recog_state);
             g_print("Recognition state: %s\n", st);
@@ -144,6 +152,7 @@ main(int argc, char *argv[])
 
     const char *detection_model = "models/detect-class1.tflite";
     const char *recognition_model = "models/mobile_face_net.tflite";
+    const char *anti_spoof_model = "models/mini_fas_net_v2.tflite";
 
     char *data_dir = make_faceauth_data_dir();
     g_print("Using face data dir: %s\n", data_dir);
@@ -154,7 +163,11 @@ main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    face_handle = fart_create(detection_model, recognition_model, data_dir, NULL);
+    face_handle = fart_create(detection_model,
+                              recognition_model,
+                              anti_spoof_model,
+                              data_dir,
+                              NULL);
     g_free(data_dir);
 
     if (!face_handle) {

@@ -31,6 +31,8 @@ typedef struct FaceAnalysisRecognition FaceAnalysisRecognition;
 /*
  * Create and initialize a FaceDetector instance.
  * 'detection_model' and 'recognition_model' are paths to the TFLite model files.
+ * 'anti_spoof_model' is an optional path to the anti-spoof TFLite model file.
+ * Pass NULL or an empty string to disable anti-spoof checking.
  * 'data_dir' is the directory used for persistent face data (enrolled_face.json).
  * 'enrollment_json' is optional in-memory enrollment data.
  *
@@ -43,6 +45,7 @@ typedef struct FaceAnalysisRecognition FaceAnalysisRecognition;
 FaceAnalysisRecognition *
 fart_create(const char *detection_model,
             const char *recognition_model,
+            const char *anti_spoof_model,
             const char *data_dir,
             const char *enrollment_json);
 

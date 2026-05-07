@@ -22,11 +22,15 @@
 class FaceDetector {
 public:
     /* should be fine tuned */
-    static constexpr int  FD_INPUT_SIZE = 300;
+    static constexpr int FD_INPUT_SIZE = 300;
     static constexpr bool FD_IS_QUANTIZED = true;
 
-    static constexpr int  FR_INPUT_SIZE = 112;
+    static constexpr int FR_INPUT_SIZE = 112;
     static constexpr bool FR_IS_QUANTIZED = false;
+
+    static constexpr int SPOOF_INPUT_SIZE = 80;
+    static constexpr float SPOOF_CROP_SCALE = 2.7f;
+    static constexpr float SPOOF_REAL_THRESHOLD = 0.998f;
 
     struct DetectedFace {
         cv::Rect bbox;
@@ -35,6 +39,7 @@ public:
 
     FaceDetector(const std::string& detection_model_path,
                  const std::string& recognition_model_path,
+                 const std::string& anti_spoof_model_path,
                  const char *data_dir,
                  const char *enrollment_json,
                  float min_confidence = 0.5f,
@@ -53,6 +58,9 @@ public:
 
     int
     check_brightness(const cv::Mat& face_image);
+
+    bool
+    is_live_face(const cv::Mat& image, const cv::Rect& bbox);
 
     float
     compare_embeddings(const std::vector<float>& embedding1,
@@ -89,14 +97,22 @@ private:
     int recog_input_index_ = -1;
     int recog_output_index_ = -1;
 
+    std::unique_ptr<tflite::FlatBufferModel> anti_spoof_model_;
+    std::unique_ptr<tflite::Interpreter> anti_spoofer_;
+    int spoof_input_index_ = -1;
+    int spoof_output_index_ = -1;
+    bool anti_spoof_enabled_ = false;
+
     TfLiteDelegate* nnapi_detection_delegate_ = nullptr;
     TfLiteDelegate* nnapi_recognition_delegate_ = nullptr;
+    TfLiteDelegate* nnapi_spoof_delegate_ = nullptr;
 
     float min_confidence_ = 0.5f;
     float max_distance_ = 0.7f;
 
     std::mutex detector_mutex_;
     std::mutex recognizer_mutex_;
+    std::mutex spoof_mutex_;
 
     std::vector<std::vector<float>> pending_enrollments_;
     std::vector<float> enrolled_embedding_;
@@ -106,7 +122,11 @@ private:
 
     void
     init_common(const std::string& detection_model_path,
-                const std::string& recognition_model_path);
+                const std::string& recognition_model_path,
+                const std::string& anti_spoof_model_path);
+
+    cv::Mat
+    extract_anti_spoof_face(const cv::Mat& image, const cv::Rect& bbox);
 
     std::vector<float>
     normalize_vector(const std::vector<float>& vec);

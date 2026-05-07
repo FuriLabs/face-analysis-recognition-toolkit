@@ -23,6 +23,7 @@ extern "C" {
 FaceAnalysisRecognition *
 fart_create(const char *detection_model,
             const char *recognition_model,
+            const char *anti_spoof_model,
             const char *data_dir,
             const char *enrollment_json)
 {
@@ -43,6 +44,10 @@ fart_create(const char *detection_model,
         return nullptr;
     }
 
+    std::string anti_spoof_model_path;
+    if (anti_spoof_model && anti_spoof_model[0] != '\0')
+        anti_spoof_model_path = std::string(anti_spoof_model);
+
     FaceAnalysisRecognition *handle = new FaceAnalysisRecognition();
     if (!handle) {
         g_debug("fart_create: failed to allocate handle");
@@ -52,6 +57,7 @@ fart_create(const char *detection_model,
     try {
         handle->instance = new FaceDetector(std::string(detection_model),
                                             std::string(recognition_model),
+                                            anti_spoof_model_path,
                                             has_data_dir ? data_dir : nullptr,
                                             has_json ? enrollment_json : nullptr);
     } catch (const std::exception &e) {
@@ -71,8 +77,11 @@ fart_create(const char *detection_model,
         return nullptr;
     }
 
-    g_debug("fart_create: created handle=%p instance=%p mode=%s",
-            handle, handle->instance, has_data_dir ? "file" : "json");
+    g_debug("fart_create: created handle=%p instance=%p mode=%s anti_spoof=%s",
+            handle,
+            handle->instance,
+            has_data_dir ? "file" : "json",
+            anti_spoof_model_path.empty() ? "disabled" : "enabled");
     return handle;
 }
 
